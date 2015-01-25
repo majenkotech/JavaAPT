@@ -74,5 +74,24 @@ public class CLI {
                 System.out.println("    " + px.getName());
             }
         }
+        if (args[1].equals("remove")) {
+            if (args.length != 3) {
+                System.err.println("Usage: apt <path> remove <package>");
+                System.exit(10);
+            }
+            Package p = apt.getPackage(args[2]);
+            if (p == null) {
+                System.err.println("Package not found");
+                System.exit(10);
+            }
+            apt.uninstallPackage(p, false);
+        }
+        if (args[1].equals("upgrade")) {
+            Package[] ps = apt.getUpgradeList();
+            for (Package p : ps) {
+                System.out.println(p.getName());
+                apt.installPackage(p);
+            }
+        }
     }
 }

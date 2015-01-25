@@ -57,7 +57,19 @@ public class APT {
         installedDB = new File(dbFolder, "installed.db");
 
         cachedPackages = loadPackages(packagesDB);
-        installedPackages = loadPackages(installedDB);
+        installedPackages = new HashMap<String, Package>();
+        File[] pks = packagesFolder.listFiles();
+        for (File pk : pks) {
+            if (pk.isDirectory()) {
+                if (!pk.getName().startsWith(".")) {
+                    File pf = new File(pk, "control");
+                    if (pf.exists()) {
+                        HashMap<String, Package> ap = loadPackages(pf);
+                        installedPackages.putAll(ap);
+                    }
+                }
+            }
+        }
     }
 
     public HashMap<String, Package> loadPackages(File f) {
@@ -145,8 +157,8 @@ public class APT {
     }
 
     public void listPackages(String section) {
-        String format = "%-50s %10s %10s";
-        System.out.println(String.format(format, "Package", "Installed", "Available"));
+        String format = "%-50s %10s %10s %s";
+        System.out.println(String.format(format, "Package", "Installed", "Available", ""));
         for (Package p : cachedPackages.values()) {
             if ((section != null) && (!(p.getSection().equals(section)))) {
                 continue;
@@ -154,10 +166,14 @@ public class APT {
             String name = p.getName();
             Version avail = p.getVersion();
             Version inst = null;
+            String msg = "";
             if (installedPackages.get(name) != null) {
                 inst = installedPackages.get(name).getVersion();
+                if (avail.compareTo(inst) > 0) {
+                    msg = "UPDATE!";
+                }
             }
-            System.out.println(String.format(format, name, inst == null ? "" : inst.toString(), avail.toString()));
+            System.out.println(String.format(format, name, inst == null ? "" : inst.toString(), avail.toString(), msg));
         }
     }
 
@@ -174,22 +190,24 @@ public class APT {
         HashMap<String, Package> pkgList = new HashMap<String, Package>();
 
         String[] deps = top.getDependencies();
-        for (String dep : deps) {
-            depList.add(dep);
-        }
+        if (deps != null) {
+            for (String dep : deps) {
+                depList.add(dep);
+            }
 
-        String adep;
-        while ((adep = depList.poll()) != null) {
-            Package foundPkg = cachedPackages.get(adep);
-            if (foundPkg == null) {
-                System.err.println("Broken dependency: " + adep);
-            } else {
-                if (pkgList.get(adep) == null) {
-                    pkgList.put(adep, foundPkg);
-                    String[] subDeps = foundPkg.getDependencies();
-                    if (subDeps != null) {
-                        for (String dep : subDeps) {
-                            depList.add(dep);
+            String adep;
+            while ((adep = depList.poll()) != null) {
+                Package foundPkg = cachedPackages.get(adep);
+                if (foundPkg == null) {
+                    System.err.println("Broken dependency: " + adep);
+                } else {
+                    if (pkgList.get(adep) == null) {
+                        pkgList.put(adep, foundPkg);
+                        String[] subDeps = foundPkg.getDependencies();
+                        if (subDeps != null) {
+                            for (String dep : subDeps) {
+                                depList.add(dep);
+                            }
                         }
                     }
                 }
@@ -198,12 +216,31 @@ public class APT {
         return pkgList.values().toArray(new Package[0]);
     }
 
+    public boolean isInstalled(Package p) {
+        String name = p.getName();
+        Package inst = installedPackages.get(name);
+        if (inst == null) {
+            return false;
+        }
+        Version iv = inst.getVersion();
+        Version pv = p.getVersion();
+        if (pv.compareTo(iv) > 0) {
+            return false;
+        }
+        return true;
+    }
+
     public void installPackage(Package p) {
+        if (isInstalled(p)) {
+            return;
+        }
         Package[] deps = resolveDepends(p);
         for (Package dep : deps) {
-            if (!dep.fetchPackage(cacheFolder)) {
-                System.err.println("Error downloading " + dep);
-                return;
+            if (!isInstalled(dep)) {
+                if (!dep.fetchPackage(cacheFolder)) {
+                    System.err.println("Error downloading " + dep);
+                    return;
+                }
             }
         }
         if (!p.fetchPackage(cacheFolder)) {
@@ -211,8 +248,85 @@ public class APT {
         }
 
         for (Package dep : deps) {
-            dep.extractPackage(cacheFolder, root);
+            if (!isInstalled(dep)) {
+                dep.extractPackage(cacheFolder, packagesFolder, root);
+            }
         }
-        p.extractPackage(cacheFolder, root);
+        p.extractPackage(cacheFolder, packagesFolder, root);
+        initRepository();
+    }
+
+    public Package[] getUpgradeList() {
+        ArrayList<Package> toUpdate = new ArrayList<Package>();
+
+        for (Package p : cachedPackages.values()) {
+            String name = p.getName();
+            Version avail = p.getVersion();
+            Version inst = null;
+            String msg = "";
+            if (installedPackages.get(name) != null) {
+                inst = installedPackages.get(name).getVersion();
+                if (avail.compareTo(inst) > 0) {
+                    toUpdate.add(p);
+                }
+            }
+        }
+        return toUpdate.toArray(new Package[0]);
+    }
+
+    public void uninstallPackage(Package p, boolean force) {
+        try {
+            if (!force) {
+                for (Package ip : installedPackages.values()) {
+                    String[] deps = ip.getDependencies();
+                    if (deps == null) {
+                        continue;
+                    }
+                    for (String dep : deps) {
+                        if (dep.equals(p.getName())) {
+                            System.err.println(p.getName() + " is required by " + ip.getName() + ". Will not remove.");
+                            return;
+                        }
+                    }
+                }
+            }
+
+            ArrayList<File>files = new ArrayList<File>();
+            File pdir = new File(packagesFolder, p.getName());
+            File plist = new File(pdir, "files");
+            FileReader fr = new FileReader(plist);
+            BufferedReader br = new BufferedReader(fr);
+            String line;
+            while ((line = br.readLine()) != null) {
+                File f = new File(line);
+                files.add(f);
+            }
+            br.close();
+            fr.close();
+
+            ArrayList<File>dirs = new ArrayList<File>();
+            for (File f : files) {
+                if (!f.isDirectory()) {
+                    f.delete();
+                } else {
+                    dirs.add(f);
+                }
+            }
+
+            Collections.sort(dirs);
+            Collections.reverse(dirs);
+
+            for (File dir : dirs) {
+                dir.delete();
+            }
+
+            plist.delete();
+            File cf = new File(pdir, "control");
+            cf.delete();
+            pdir.delete();
+            initRepository();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

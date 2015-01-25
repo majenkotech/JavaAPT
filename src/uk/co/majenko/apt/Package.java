@@ -5,6 +5,10 @@ import java.util.regex.*;
 import java.io.*;
 import java.net.*;
 
+import org.apache.commons.compress.archivers.ar.*;
+import org.apache.commons.compress.archivers.tar.*;
+import org.apache.commons.compress.compressors.gzip.*;
+
 public class Package implements Comparable, Serializable {
     public HashMap<String, String> properties = new HashMap<String, String>();
 
@@ -152,51 +156,100 @@ public class Package implements Comparable, Serializable {
 
     // Extract a package and install it. Returns the control file
     // contents as a string.
-    public String extractPackage(File cache, File root) {
+    public boolean extractPackage(File cache, File db, File root) {
         String control = "";
+        HashMap<String, Integer> installedFiles = new HashMap<String, Integer>();
         try {
             File src = new File(cache, getFilename());
             if (!src.exists()) {
                 System.err.println("Unable to open cache file");
-                return null;
+                return false;
             }
+
 
             System.out.println("Extracting " + getFilename());
-            FileReader fr = new FileReader(src);
-            BufferedReader br = new BufferedReader(fr);
-            String line = br.readLine();
-            if (line == null) {
-                System.err.println("Invalid file format");
-                return null;
+            FileInputStream fis = new FileInputStream(src);
+            ArArchiveInputStream ar = new ArArchiveInputStream(fis);
+
+            ArArchiveEntry file = ar.getNextArEntry();
+            while (file != null) {
+                long size = file.getSize();
+                String name = file.getName();
+
+                System.err.println("Next entry: " + name + " at " + size + " bytes");
+                if (name.equals("control.tar.gz")) {
+                    GzipCompressorInputStream gzip = new GzipCompressorInputStream(ar);
+                    TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
+                    TarArchiveEntry te = tar.getNextTarEntry();
+                    while (te != null) {
+                        int tsize = (int)te.getSize();
+                        String tname = te.getName();
+                        if (tname.equals("./control")) {
+                            byte[] data = new byte[tsize];
+                            tar.read(data, 0, tsize);
+                            control = new String(data, "UTF-8");
+                            System.err.println(control);
+                        }
+                        te = tar.getNextTarEntry();
+                    }
+
+                }
+
+                if (name.equals("data.tar.gz")) {
+                    GzipCompressorInputStream gzip = new GzipCompressorInputStream(ar);
+                    TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
+                    TarArchiveEntry te = tar.getNextTarEntry();
+                    while (te != null) {
+                        int tsize = (int)te.getSize();
+                        String tname = te.getName();
+                        System.err.println("Extracting: " + tname + " at " + tsize + " bytes");
+
+                        File dest = new File(root, tname);
+                        if (te.isDirectory()) {
+                            dest.mkdirs();
+                            installedFiles.put(dest.getAbsolutePath(), -1);
+                        } else {
+                            byte[] buffer = new byte[1024];
+                            int nread;
+                            int toRead = tsize;
+                            FileOutputStream fos = new FileOutputStream(dest);
+                            while ((nread = tar.read(buffer, 0, toRead > 1024 ? 1024 : toRead)) > 0) {
+                                toRead -= nread;
+                                fos.write(buffer, 0, nread);
+                            }
+                            fos.close();
+                            installedFiles.put(dest.getAbsolutePath(), tsize);
+                        }
+                        te = tar.getNextTarEntry();
+                    }
+                }
+                    
+                    
+                file = ar.getNextArEntry();
             }
-            if (!line.equals("!<arch>")) {
-                System.err.println("Invalid file format");
-                return null;
-            }
-            line = br.readLine();
-            String filename = line.substring(0, 15).trim();
-            String timestamp = line.substring(16, 27).trim();
-            String owner = line.substring(28, 33).trim();
-            String group = line.substring(34, 39).trim();
-            String mode = line.substring(40, 47).trim();
-            String size = line.substring(48, 57).trim();
 
-            int length = Integer.parseInt(size);
-            System.err.println("First file: " + filename + " is " + length + " bytes.");
-            char[] data = new char[length];
 
-            br.read(data, 0, length);
-
-            String ver = new String(data);
-            System.err.println("Archive version: " + ver);
-
-            br.close();
-            fr.close();
+            ar.close();
+            fis.close();
             
+
+            File pf = new File(db, getName());
+            pf.mkdirs();
+            File cf = new File(pf, "control");
+            PrintWriter pw = new PrintWriter(cf);
+            pw.println(control);
+            pw.close();
+            File ff = new File(pf, "files");
+            pw = new PrintWriter(ff);
+            for (String f : installedFiles.keySet()) {
+                pw.println(f);
+            }
+            pw.close();
         } catch (Exception e) {
             e.printStackTrace();
-            return null;
+            return false;
         }
-        return control;
+        
+        return true;
     }
 }

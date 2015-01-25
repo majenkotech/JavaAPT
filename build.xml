@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<project name="APT Library" default="build">
+
+    <property file="version.plist"/>
+    <condition property="bootclass.path" value="/usr/lib/jvm/java-6-openjdk-i386/jre/lib/rt.jar">
+        <and>
+            <os family="unix"/>
+            <not>
+                <os family="mac"/>
+            </not>
+            <os arch="i386"/>
+        </and>
+    </condition>
+    <condition property="bootclass.path" value="/usr/lib/jvm/java-6-openjdk-amd64/jre/lib/rt.jar">
+        <and>
+            <os family="unix"/>
+            <not>
+                <os family="mac"/>
+            </not>
+            <os arch="amd64"/>
+        </and>
+    </condition>
+
+    <tstamp>
+        <format property="TODAY" pattern="yyyyMMdd" />
+    </tstamp>
+
+    <target name="clean" description="Clean out the build directories">
+        <delete dir="bin" />
+        <delete file="apt.jar" />
+    </target>
+
+    <target name="compile" description="Compile">
+        <mkdir dir="bin" />
+        <path id="class.path">
+            <fileset dir="lib">
+                <include name="*.jar" />
+            </fileset>
+        </path>
+        <javac target="1.6" 
+               debug="true"
+               debuglevel="lines,vars,source"
+               deprecation="true"
+               source="1.6"
+               encoding="UTF-8"
+               bootclasspath="${bootclass.path}"
+               includeAntRuntime="false"
+               srcdir="src" 
+               destdir="bin">
+            <classpath refid="class.path" />
+            <compilerarg value="-Xlint:unchecked"/>
+        </javac>
+    </target>		
+
+    <target name="build" depends="compile" description="Build APT">
+        <jar basedir="bin" destfile="apt.jar">
+            <fileset dir="bin" />
+            <fileset dir="resources" />
+            <zipgroupfileset dir="lib" includes="*.jar" />
+            <manifest>
+                <attribute name="Built-By" value="${user.name}" />
+                <attribute name="Main-Class" value="uk.co.majenko.apt.CLI" />
+                <attribute name="Class-Path" value="apt.jar" />
+                <attribute name="Version" value="${version}" />
+                <attribute name="Compiled" value="${TODAY}" />
+            </manifest>
+        </jar>
+        <chmod perm="0755" file="apt.jar" />
+    </target>
+</project>

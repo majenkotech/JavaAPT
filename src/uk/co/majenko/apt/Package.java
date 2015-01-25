@@ -202,7 +202,7 @@ public class Package implements Comparable, Serializable {
                     while (te != null) {
                         int tsize = (int)te.getSize();
                         String tname = te.getName();
-                        System.err.println("Extracting: " + tname + " at " + tsize + " bytes");
+                        System.err.println("Extracting: " + tname + " at " + tsize + " bytes = " + te.getMode());
 
                         File dest = new File(root, tname);
                         if (te.isDirectory()) {
@@ -218,6 +218,9 @@ public class Package implements Comparable, Serializable {
                                 fos.write(buffer, 0, nread);
                             }
                             fos.close();
+                            dest.setExecutable((te.getMode() & 0100) == 0100);
+                            dest.setWritable((te.getMode() & 0200) == 0200);
+                            dest.setReadable((te.getMode() & 0400) == 0400);
                             installedFiles.put(dest.getAbsolutePath(), tsize);
                         }
                         te = tar.getNextTarEntry();

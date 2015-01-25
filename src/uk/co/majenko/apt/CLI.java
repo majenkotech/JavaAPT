@@ -79,7 +79,7 @@ public class CLI {
                 System.err.println("Usage: apt <path> remove <package>");
                 System.exit(10);
             }
-            Package p = apt.getPackage(args[2]);
+            Package p = apt.getInstalledPackage(args[2]);
             if (p == null) {
                 System.err.println("Package not found");
                 System.exit(10);

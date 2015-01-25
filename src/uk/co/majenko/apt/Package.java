@@ -11,6 +11,7 @@ import org.apache.commons.compress.compressors.gzip.*;
 
 public class Package implements Comparable, Serializable {
     public HashMap<String, String> properties = new HashMap<String, String>();
+    public boolean isValid = false;
 
     public Package(String data) {
         String[] lines = data.split("\n");
@@ -21,6 +22,7 @@ public class Package implements Comparable, Serializable {
                 properties.put(m.group(1), m.group(2));
             }
         }
+        isValid = (getName() != null);
     }
 
     public Package(String source, String data) {
@@ -33,6 +35,7 @@ public class Package implements Comparable, Serializable {
             }
         }
         properties.put("Repository", source);
+        isValid = (getName() != null);
     }
 
     public String toString() {

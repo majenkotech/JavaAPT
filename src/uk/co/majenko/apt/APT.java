@@ -89,7 +89,9 @@ public class APT {
                 if (line.equals("")) {
                     if (chunk.toString().length() > 0) {
                         Package p = new Package(chunk.toString());
-                        out.put(p.getName(), p);
+                        if (p.isValid) {
+                            out.put(p.getName(), p);
+                        }
                     }
                     chunk = new StringBuilder();
                 } else {
@@ -175,6 +177,18 @@ public class APT {
             }
             System.out.println(String.format(format, name, inst == null ? "" : inst.toString(), avail.toString(), msg));
         }
+        for (Package p : installedPackages.values()) {
+            if ((section != null) && (!(p.getSection().equals(section)))) {
+                continue;
+            }
+            String name = p.getName();
+            Version avail = p.getVersion();
+            Version inst = null;
+            String msg = "";
+            if (cachedPackages.get(name) == null) {
+                System.out.println(String.format(format, name, avail.toString(), "", msg));
+            }
+        }
     }
 
     public void listPackages() {
@@ -183,6 +197,10 @@ public class APT {
 
     public Package getPackage(String name) {
         return cachedPackages.get(name);
+    }
+
+    public Package getInstalledPackage(String name) {
+        return installedPackages.get(name);
     }
 
     public Package[] resolveDepends(Package top) {

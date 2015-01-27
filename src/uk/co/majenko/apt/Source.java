@@ -48,32 +48,26 @@ public class Source {
 
         String[] lines = inData.toString().split("\n");
         StringBuilder onePackage = new StringBuilder();
-        String currentLine = "";
         for (String line : lines) {
             if (line.equals("")) {
-                onePackage.append(currentLine + "\n");
-                Package thisPackage = new Package(urlRoot, onePackage.toString());
-                if (packages.get(thisPackage.getName()) != null) {
-                    Package testPackage = packages.get(thisPackage.getName());
-                    if (thisPackage.getVersion().compareTo(testPackage.getVersion()) > 0) {
+                if (onePackage.toString().length() > 10) {
+                    Package thisPackage = new Package(urlRoot, onePackage.toString());
+                    if (packages.get(thisPackage.getName()) != null) {
+                        Package testPackage = packages.get(thisPackage.getName());
+                        if (thisPackage.getVersion().compareTo(testPackage.getVersion()) > 0) {
+                            packages.put(thisPackage.getName(), thisPackage);
+                        }
+                    } else {
                         packages.put(thisPackage.getName(), thisPackage);
                     }
-                } else {
-                    packages.put(thisPackage.getName(), thisPackage);
                 }
                 onePackage = new StringBuilder();
                 continue;
             }
-            if (line.startsWith(" ")) {
-                currentLine += line;
-            } else {
-                onePackage.append(currentLine + "\n");
-                currentLine = line;
-            }
+            onePackage.append(line + "\n");
         }
 
-        if (!currentLine.equals("")) {
-            onePackage.append(currentLine + "\n");
+        if (onePackage.toString().length() > 10) {
             Package thisPackage = new Package(urlRoot, onePackage.toString());
             if (packages.get(thisPackage.getName()) != null) {
                 Package testPackage = packages.get(thisPackage.getName());
@@ -84,6 +78,7 @@ public class Source {
                 packages.put(thisPackage.getName(), thisPackage);
             }
         }
+
         Package[] list = packages.values().toArray(new Package[0]);
         Arrays.sort(list);
         return list;

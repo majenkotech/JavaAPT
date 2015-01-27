@@ -13,7 +13,6 @@ public class APT {
     File cacheFolder;
     File packagesFolder;
     File packagesDB;
-    File installedDB;
 
     HashMap<String, Package> cachedPackages;
     HashMap<String, Package> installedPackages;
@@ -54,7 +53,6 @@ public class APT {
         makeTree();
 
         packagesDB = new File(dbFolder, "packages.db");
-        installedDB = new File(dbFolder, "installed.db");
 
         cachedPackages = loadPackages(packagesDB);
         installedPackages = new HashMap<String, Package>();
@@ -121,17 +119,6 @@ public class APT {
         } catch (Exception e) {
             e.printStackTrace();
         }
-
-        try {
-            PrintWriter pw = new PrintWriter(installedDB);
-            for (Package p : installedPackages.values()) {
-                pw.print(p.getInfo());
-                pw.print("\n");
-            }
-            pw.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
     }
 
     public void addSource(Source s) {
@@ -161,7 +148,8 @@ public class APT {
     public void listPackages(String section) {
         String format = "%-50s %10s %10s %s";
         System.out.println(String.format(format, "Package", "Installed", "Available", ""));
-        for (Package p : cachedPackages.values()) {
+        Package[] plist = getPackages(section);
+        for (Package p : plist) {
             if ((section != null) && (!(p.getSection().equals(section)))) {
                 continue;
             }
@@ -195,6 +183,22 @@ public class APT {
         listPackages(null);
     }
 
+    public Package[] getPackages(String section) {
+        ArrayList<Package> out = new ArrayList<Package>();
+        for (Package p : cachedPackages.values()) {
+            if ((section == null) || (p.getSection().equals(section))) {
+                out.add(p);
+            }
+        }
+        Package[] plist = out.toArray(new Package[0]);
+        Arrays.sort(plist);
+        return plist;
+    }
+
+    public Package[] getPackages() {
+        return getPackages(null);
+    }
+
     public Package getPackage(String name) {
         return cachedPackages.get(name);
     }
@@ -207,7 +211,7 @@ public class APT {
         ArrayDeque<String> depList = new ArrayDeque<String>();
         HashMap<String, Package> pkgList = new HashMap<String, Package>();
 
-        String[] deps = top.getDependencies();
+        String[] deps = top.getDependencies(true);
         if (deps != null) {
             for (String dep : deps) {
                 depList.add(dep);
@@ -221,7 +225,7 @@ public class APT {
                 } else {
                     if (pkgList.get(adep) == null) {
                         pkgList.put(adep, foundPkg);
-                        String[] subDeps = foundPkg.getDependencies();
+                        String[] subDeps = foundPkg.getDependencies(true);
                         if (subDeps != null) {
                             for (String dep : subDeps) {
                                 depList.add(dep);
@@ -234,7 +238,7 @@ public class APT {
         return pkgList.values().toArray(new Package[0]);
     }
 
-    public boolean isInstalled(Package p) {
+    public boolean isUpgradable(Package p) {
         String name = p.getName();
         Package inst = installedPackages.get(name);
         if (inst == null) {
@@ -243,11 +247,49 @@ public class APT {
         Version iv = inst.getVersion();
         Version pv = p.getVersion();
         if (pv.compareTo(iv) > 0) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isInstalled(Package p) {
+        String name = p.getName();
+        Package inst = installedPackages.get(name);
+        if (inst == null) {
             return false;
         }
         return true;
     }
 
+    public void upgradePackage(Package p) {
+        if (!isUpgradable(p)) {
+            return;
+        }
+        Package[] deps = resolveDepends(p);
+        for (Package dep : deps) {
+            if (!isInstalled(dep) || isUpgradable(dep)) {
+                if (!dep.fetchPackage(cacheFolder)) {
+                    System.err.println("Error downloading " + dep);
+                    return;
+                }
+            }
+        }
+        if (!p.fetchPackage(cacheFolder)) {
+            System.err.println("Error downloading " + p);
+        }
+
+        for (Package dep : deps) {
+            if (!isInstalled(dep)) {
+                dep.extractPackage(cacheFolder, packagesFolder, root);
+            } else if(isUpgradable(dep)) {
+                uninstallPackage(dep, true);
+                dep.extractPackage(cacheFolder, packagesFolder, root);
+            }
+        }
+        uninstallPackage(p, true);
+        p.extractPackage(cacheFolder, packagesFolder, root);
+        initRepository();
+    }
     public void installPackage(Package p) {
         if (isInstalled(p)) {
             return;
@@ -292,20 +334,48 @@ public class APT {
         return toUpdate.toArray(new Package[0]);
     }
 
-    public void uninstallPackage(Package p, boolean force) {
+    public Package[] getDependants(Package p) {
+        ArrayList<Package> out = new ArrayList<Package>();
+
+        for (Package ip : installedPackages.values()) {
+            String[] deps = ip.getDependencies(false);
+            if (deps == null) {
+                continue;
+            }
+            for (String dep : deps) {
+                if (dep.equals(p.getName())) {
+                    if (out.indexOf(ip) == -1) {
+                        out.add(ip);
+                    }
+                }
+            }
+        }
+        return out.toArray(new Package[0]);
+    }
+
+    public void recursivelyUninstallPackage(Package p) {
+        if (!isInstalled(p)) {
+            return;
+        }
+        Package[] deps = getDependants(p);
+        for (Package dep : deps) {
+            recursivelyUninstallPackage(dep);
+        }
+        System.out.println("Uninstalling " + p);
+        uninstallPackage(p, false);
+    }
+
+    public String uninstallPackage(Package p, boolean force) {
         try {
             if (!force) {
-                for (Package ip : installedPackages.values()) {
-                    String[] deps = ip.getDependencies();
-                    if (deps == null) {
-                        continue;
+                Package[] deps = getDependants(p);
+                if (deps.length > 0) {
+                    String o = p.getName() + " is required by:\n";
+                    for (Package dep : deps) {
+                        o += "    " + dep.getName() + "\n";
                     }
-                    for (String dep : deps) {
-                        if (dep.equals(p.getName())) {
-                            System.err.println(p.getName() + " is required by " + ip.getName() + ". Will not remove.");
-                            return;
-                        }
-                    }
+                    o += "It cannot be removed.";
+                    return o;
                 }
             }
 
@@ -322,6 +392,9 @@ public class APT {
             br.close();
             fr.close();
 
+            int fcount = files.size();
+            int done = 0;
+
             ArrayList<File>dirs = new ArrayList<File>();
             for (File f : files) {
                 if (!f.isDirectory()) {
@@ -329,13 +402,20 @@ public class APT {
                 } else {
                     dirs.add(f);
                 }
+                done++;
+                p.reportPercentage((done * 50) / fcount);
             }
 
             Collections.sort(dirs);
             Collections.reverse(dirs);
 
+            fcount = dirs.size();
+            done = 0;
+
             for (File dir : dirs) {
                 dir.delete();
+                done++;
+                p.reportPercentage(50 + ((done * 50) / fcount));
             }
 
             plist.delete();
@@ -346,5 +426,9 @@ public class APT {
         } catch (Exception e) {
             e.printStackTrace();
         }
+        return null;
+    }
+    public int getPackageCount() {
+        return cachedPackages.values().size();
     }
 }

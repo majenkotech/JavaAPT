@@ -8,32 +8,81 @@ import java.net.*;
 import org.apache.commons.compress.archivers.ar.*;
 import org.apache.commons.compress.archivers.tar.*;
 import org.apache.commons.compress.compressors.gzip.*;
+import org.apache.commons.compress.compressors.xz.*;
+import org.apache.commons.compress.compressors.bzip2.*;
 
 public class Package implements Comparable, Serializable {
     public HashMap<String, String> properties = new HashMap<String, String>();
     public boolean isValid = false;
+    public AptPercentageListener pct = null;
+
+    public int stateCode = 0;
+
+    public int getState() { return stateCode; }
+    public void setState(int c) { 
+        stateCode = c; 
+    }
 
     public Package(String data) {
         String[] lines = data.split("\n");
-        Pattern p = Pattern.compile("^([^:]+):\\s+(.*)$");
+        Pattern p = Pattern.compile("^([^:]+):\\s+(.*)$", Pattern.MULTILINE);
+
+        String currentLine = "";
         for (String line : lines) {
-            Matcher m = p.matcher(line);
-            if (m.find()) {
-                properties.put(m.group(1), m.group(2));
+            if (line.startsWith(" ")) {
+                currentLine += "\n";
+                currentLine += line;
+            } else {
+                int colon = currentLine.indexOf(":");
+                if (colon > 0) {
+                    properties.put(currentLine.substring(0, colon), currentLine.substring(colon+2));
+                }
+                currentLine = line;
             }
         }
+        if (!currentLine.equals("")) {
+            int colon = currentLine.indexOf(":");
+            if (colon > 0) {
+                properties.put(currentLine.substring(0, colon), currentLine.substring(colon+2));
+            }
+        }
+
         isValid = (getName() != null);
+    }
+                    
+
+    public void attachPercentageListener(AptPercentageListener listener) {
+        pct = listener;
+    }
+
+    public void detachPercentageListener() {
+        pct = null;
     }
 
     public Package(String source, String data) {
         String[] lines = data.split("\n");
-        Pattern p = Pattern.compile("^([^:]+):\\s+(.*)$");
+        Pattern p = Pattern.compile("^([^:]+):\\s+(.*)$", Pattern.MULTILINE);
+
+        String currentLine = "";
         for (String line : lines) {
-            Matcher m = p.matcher(line);
-            if (m.find()) {
-                properties.put(m.group(1), m.group(2));
+            if (line.startsWith(" ")) {
+                currentLine += "\n";
+                currentLine += line;
+            } else {
+                int colon = currentLine.indexOf(":");
+                if (colon > 0) {
+                    properties.put(currentLine.substring(0, colon), currentLine.substring(colon+2));
+                }
+                currentLine = line;
             }
         }
+        if (!currentLine.equals("")) {
+            int colon = currentLine.indexOf(":");
+            if (colon > 0) {
+                properties.put(currentLine.substring(0, colon), currentLine.substring(colon+2));
+            }
+        }
+
         properties.put("Repository", source);
         isValid = (getName() != null);
     }
@@ -50,6 +99,10 @@ public class Package implements Comparable, Serializable {
         return properties.get("Package");
     }
 
+    public String get(String k) {
+        return properties.get(k);
+    }
+
     public int compareTo(Object o) {
         if (o instanceof Package) {
             Package op = (Package)o;
@@ -60,6 +113,10 @@ public class Package implements Comparable, Serializable {
 
     public String getRepository() {
         return properties.get("Repository");
+    }
+
+    public String getDescription() {
+        return properties.get("Description");
     }
 
     public URI getURI() {
@@ -79,12 +136,27 @@ public class Package implements Comparable, Serializable {
         return out.toString();
     }
 
-    public String[] getDependencies() {
+    public String[] getDependencies(boolean incRec) {
         String deps = properties.get("Depends");
+        if (incRec) {
+            String rec = properties.get("Recommends");
+            if (rec != null) {
+                if (deps == null) {
+                    deps = rec;
+                } else {
+                    deps += ", " + rec;
+                }
+            }
+        }
         if (deps == null) {
             return null;
         }
-        return deps.split(" ");
+        ArrayList<String> out = new ArrayList<String>();
+        String[] spl = deps.split(",");
+        for (String dep : spl) {
+            out.add(dep.trim());
+        }
+        return out.toArray(new String[0]);
     }
 
     public String getSection() {
@@ -103,7 +175,6 @@ public class Package implements Comparable, Serializable {
         File downloadTo = new File(folder, getFilename());
         try {
             URL downloadFrom = getURI().toURL();
-            System.out.println("Downloading " + downloadFrom);
             HttpURLConnection httpConn = (HttpURLConnection) downloadFrom.openConnection();
             int contentLength = httpConn.getContentLength();
 
@@ -118,15 +189,15 @@ public class Package implements Comparable, Serializable {
             byte[] buffer = new byte[1024];
             int n;
             long tot = 0;
+            int lastVal = -1;
             while ((n = in.read(buffer)) > 0) {
                 tot += n;
-                Long[] l = new Long[1];
-                if (contentLength == -1) {
-                    l[0] = new Long(0);
-                    publish(l);
-                } else {
-                    l[0] = (tot * 100) / contentLength;
-                    publish(l);
+                if (contentLength != -1) {
+                    int tpct = (int)((tot * 100) / contentLength);
+                    if (tpct != lastVal) {
+                        lastVal = tpct;
+                        reportPercentage(tpct);
+                    }
                 }
                 out.write(buffer, 0, n);
             }
@@ -142,21 +213,6 @@ public class Package implements Comparable, Serializable {
         return true;
     }
 
-    Long lastVal = -1L;
-    public void publish(Long[] vals) {
-        if (vals[0] != lastVal) {
-            lastVal = vals[0];
-            if ((lastVal % 10L) == 0L) {
-                System.out.print(lastVal + "%");
-            } else {
-                System.out.print(".");
-            }
-            if (lastVal == 100L) {
-                System.out.print("\n");
-            }
-        }
-    }
-
     // Extract a package and install it. Returns the control file
     // contents as a string.
     public boolean extractPackage(File cache, File db, File root) {
@@ -170,7 +226,6 @@ public class Package implements Comparable, Serializable {
             }
 
 
-            System.out.println("Extracting " + getFilename());
             FileInputStream fis = new FileInputStream(src);
             ArArchiveInputStream ar = new ArArchiveInputStream(fis);
 
@@ -179,7 +234,7 @@ public class Package implements Comparable, Serializable {
                 long size = file.getSize();
                 String name = file.getName();
 
-                System.err.println("Next entry: " + name + " at " + size + " bytes");
+
                 if (name.equals("control.tar.gz")) {
                     GzipCompressorInputStream gzip = new GzipCompressorInputStream(ar);
                     TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
@@ -191,7 +246,6 @@ public class Package implements Comparable, Serializable {
                             byte[] data = new byte[tsize];
                             tar.read(data, 0, tsize);
                             control = new String(data, "UTF-8");
-                            System.err.println(control);
                         }
                         te = tar.getNextTarEntry();
                     }
@@ -199,18 +253,29 @@ public class Package implements Comparable, Serializable {
                 }
 
                 if (name.equals("data.tar.gz")) {
+                    HashMap<String, String> symbolicLinks = new HashMap<String, String>();
                     GzipCompressorInputStream gzip = new GzipCompressorInputStream(ar);
                     TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
                     TarArchiveEntry te = tar.getNextTarEntry();
                     while (te != null) {
                         int tsize = (int)te.getSize();
                         String tname = te.getName();
-                        System.err.println("Extracting: " + tname + " at " + tsize + " bytes = " + te.getMode());
+                        if (pct != null) {
+                            long done = src.length() - (long)fis.available();
+                            int tpct = (int)((done * 100L) / src.length());
+                            reportPercentage(tpct);
+                        }
 
                         File dest = new File(root, tname);
                         if (te.isDirectory()) {
                             dest.mkdirs();
                             installedFiles.put(dest.getAbsolutePath(), -1);
+                        } else if (te.isLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
+                        } else if (te.isSymbolicLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
                         } else {
                             byte[] buffer = new byte[1024];
                             int nread;
@@ -228,9 +293,151 @@ public class Package implements Comparable, Serializable {
                         }
                         te = tar.getNextTarEntry();
                     }
+                    for (String link : symbolicLinks.keySet()) {
+                        String tgt = symbolicLinks.get(link);
+                        File linkFile = new File(root, link);
+                        File linkParent = linkFile.getParentFile();
+                        File tgtFile = new File(linkParent, tgt);
+                        FileInputStream copyFrom = new FileInputStream(tgtFile);
+                        FileOutputStream copyTo = new FileOutputStream(linkFile);
+                        byte[] copyBuffer = new byte[1024];
+                        int bytesCopied = 0;
+
+                        while ((bytesCopied = copyFrom.read(copyBuffer, 0, 1024)) > 0) {
+                            copyTo.write(copyBuffer, 0, bytesCopied);
+                        }
+                        copyFrom.close();
+                        copyTo.close();
+                        linkFile.setExecutable(tgtFile.canExecute());
+                        linkFile.setReadable(tgtFile.canRead());
+                        linkFile.setWritable(tgtFile.canWrite());
+                    }
                 }
                     
-                    
+                if (name.equals("data.tar.xz")) {
+                    HashMap<String, String> symbolicLinks = new HashMap<String, String>();
+                    XZCompressorInputStream gzip = new XZCompressorInputStream(ar);
+                    TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
+                    TarArchiveEntry te = tar.getNextTarEntry();
+                    while (te != null) {
+                        int tsize = (int)te.getSize();
+                        String tname = te.getName();
+                        if (pct != null) {
+                            long done = src.length() - (long)fis.available();
+                            int tpct = (int)((done * 100L) / src.length());
+                            reportPercentage(tpct);
+                        }
+
+                        File dest = new File(root, tname);
+                        if (te.isDirectory()) {
+                            dest.mkdirs();
+                            installedFiles.put(dest.getAbsolutePath(), -1);
+                        } else if (te.isLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
+                        } else if (te.isSymbolicLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
+                        } else {
+                            byte[] buffer = new byte[1024];
+                            int nread;
+                            int toRead = tsize;
+                            FileOutputStream fos = new FileOutputStream(dest);
+                            while ((nread = tar.read(buffer, 0, toRead > 1024 ? 1024 : toRead)) > 0) {
+                                toRead -= nread;
+                                fos.write(buffer, 0, nread);
+                            }
+                            fos.close();
+                            dest.setExecutable((te.getMode() & 0100) == 0100);
+                            dest.setWritable((te.getMode() & 0200) == 0200);
+                            dest.setReadable((te.getMode() & 0400) == 0400);
+                            installedFiles.put(dest.getAbsolutePath(), tsize);
+                        }
+                        te = tar.getNextTarEntry();
+                    }
+                    for (String link : symbolicLinks.keySet()) {
+                        String tgt = symbolicLinks.get(link);
+                        File linkFile = new File(root, link);
+                        File linkParent = linkFile.getParentFile();
+                        File tgtFile = new File(linkParent, tgt);
+                        FileInputStream copyFrom = new FileInputStream(tgtFile);
+                        FileOutputStream copyTo = new FileOutputStream(linkFile);
+                        byte[] copyBuffer = new byte[1024];
+                        int bytesCopied = 0;
+
+                        while ((bytesCopied = copyFrom.read(copyBuffer, 0, 1024)) > 0) {
+                            copyTo.write(copyBuffer, 0, bytesCopied);
+                        }
+                        copyFrom.close();
+                        copyTo.close();
+                        linkFile.setExecutable(tgtFile.canExecute());
+                        linkFile.setReadable(tgtFile.canRead());
+                        linkFile.setWritable(tgtFile.canWrite());
+                    }
+                }
+
+                if (name.equals("data.tar.bz2")) {
+                    HashMap<String, String> symbolicLinks = new HashMap<String, String>();
+                    BZip2CompressorInputStream gzip = new BZip2CompressorInputStream(ar);
+                    TarArchiveInputStream tar = new TarArchiveInputStream(gzip);
+                    TarArchiveEntry te = tar.getNextTarEntry();
+                    while (te != null) {
+                        int tsize = (int)te.getSize();
+                        String tname = te.getName();
+                        if (pct != null) {
+                            long done = src.length() - (long)fis.available();
+                            int tpct = (int)((done * 100L) / src.length());
+                            reportPercentage(tpct);
+                        }
+
+                        File dest = new File(root, tname);
+                        if (te.isDirectory()) {
+                            dest.mkdirs();
+                            installedFiles.put(dest.getAbsolutePath(), -1);
+                        } else if (te.isLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
+                        } else if (te.isSymbolicLink()) {
+                            String linkdest = te.getLinkName();
+                            symbolicLinks.put(tname, linkdest);
+                        } else {
+                            byte[] buffer = new byte[1024];
+                            int nread;
+                            int toRead = tsize;
+                            FileOutputStream fos = new FileOutputStream(dest);
+                            while ((nread = tar.read(buffer, 0, toRead > 1024 ? 1024 : toRead)) > 0) {
+                                toRead -= nread;
+                                fos.write(buffer, 0, nread);
+                            }
+                            fos.close();
+                            dest.setExecutable((te.getMode() & 0100) == 0100);
+                            dest.setWritable((te.getMode() & 0200) == 0200);
+                            dest.setReadable((te.getMode() & 0400) == 0400);
+                            installedFiles.put(dest.getAbsolutePath(), tsize);
+                        }
+                        te = tar.getNextTarEntry();
+                    }
+                    for (String link : symbolicLinks.keySet()) {
+                        String tgt = symbolicLinks.get(link);
+                        File linkFile = new File(root, link);
+                        File linkParent = linkFile.getParentFile();
+                        File tgtFile = new File(linkParent, tgt);
+                        FileInputStream copyFrom = new FileInputStream(tgtFile);
+                        FileOutputStream copyTo = new FileOutputStream(linkFile);
+                        byte[] copyBuffer = new byte[1024];
+                        int bytesCopied = 0;
+
+                        while ((bytesCopied = copyFrom.read(copyBuffer, 0, 1024)) > 0) {
+                            copyTo.write(copyBuffer, 0, bytesCopied);
+                        }
+                        copyFrom.close();
+                        copyTo.close();
+                        linkFile.setExecutable(tgtFile.canExecute());
+                        linkFile.setReadable(tgtFile.canRead());
+                        linkFile.setWritable(tgtFile.canWrite());
+                    }
+                }
+
                 file = ar.getNextArEntry();
             }
 
@@ -257,5 +464,17 @@ public class Package implements Comparable, Serializable {
         }
         
         return true;
+    }
+
+    void reportPercentage(int p) {
+        if (pct != null) {
+            if (p < 0) {
+                p = 0;
+            }
+            if (p > 100) {
+                p = 100;
+            }
+            pct.updatePercentage(this, p);
+        }
     }
 }

@@ -6,7 +6,7 @@ public class CLI {
     static public void main(String[] args) {
 
         if (args.length < 2) {
-            System.err.println("Usage: apt <path> <command [args]");
+            System.err.println("Usage: apt <path> <command> [args]");
             System.exit(10);
         }
 
@@ -18,7 +18,9 @@ public class CLI {
             "cores",
             "boards",
             "compilers",
-            "plugins"
+            "plugins",
+            "extra",
+            "libraries"
         };
         Source s = new Source("http://dist.majenko.co.uk", "uecide", "linux-amd64", sections);
 
@@ -35,16 +37,17 @@ public class CLI {
             }
         }
         if (args[1].equals("install")) {
-            if (args.length != 3) {
-                System.err.println("Usage: apt <path> install <package>");
+            if (args.length < 3) {
+                System.err.println("Usage: apt <path> install <package[s]>");
                 System.exit(10);
             }
-            Package p = apt.getPackage(args[2]);
-            if (p == null) {
-                System.err.println("Package not found");
-                System.exit(10);
+            for (int i = 2; i < args.length; i++) {
+                Package p = apt.getPackage(args[i]);
+                if (p == null) {
+                    System.err.println("Package " + args[i] + " not found");
+                }
+                apt.installPackage(p);
             }
-            apt.installPackage(p);
         }
         if (args[1].equals("show")) {
             if (args.length != 3) {
@@ -75,22 +78,37 @@ public class CLI {
             }
         }
         if (args[1].equals("remove")) {
-            if (args.length != 3) {
+            if (args.length < 3) {
                 System.err.println("Usage: apt <path> remove <package>");
                 System.exit(10);
             }
-            Package p = apt.getInstalledPackage(args[2]);
-            if (p == null) {
-                System.err.println("Package not found");
-                System.exit(10);
+            if (args[2].equals("-r")) {
+                Package p = apt.getInstalledPackage(args[3]);
+                if (p == null) {
+                    System.err.println("Package not found");
+                    System.exit(10);
+                }
+                apt.recursivelyUninstallPackage(p);
+                
+            } else {
+                Package p = apt.getInstalledPackage(args[2]);
+                if (p == null) {
+                    System.err.println("Package not found");
+                    System.exit(10);
+                }
+                String ret = apt.uninstallPackage(p, false);
+                if (ret != null) {
+                    if (!ret.equals("")) {
+                        System.err.println(ret);
+                    }
+                }
             }
-            apt.uninstallPackage(p, false);
         }
         if (args[1].equals("upgrade")) {
             Package[] ps = apt.getUpgradeList();
             for (Package p : ps) {
                 System.out.println(p.getName());
-                apt.installPackage(p);
+                apt.upgradePackage(p);
             }
         }
     }
